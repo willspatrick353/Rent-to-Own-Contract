@@ -1,6 +1,8 @@
 (define-constant contract-owner tx-sender)
 (define-constant payment-deadline u30)
 (define-constant late-fee-percentage u5)
+(define-constant grace-period-blocks u144)
+(define-constant late-fee-rate u10)
 
 (define-data-var contract-active bool false)
 (define-data-var property-price uint u0)
@@ -20,6 +22,8 @@
         monthly-amount: uint,
         payments-completed: uint,
         status: (string-ascii 20),
+        next-payment-due: uint,
+        late-fees-owed: uint,
     }
 )
 
@@ -53,6 +57,8 @@
             monthly-amount: monthly-amount,
             payments-completed: u0,
             status: "ACTIVE",
+            next-payment-due: (+ stacks-block-height payment-deadline),
+            late-fees-owed: u0,
         })
         (ok true)
     )
@@ -76,7 +82,10 @@
             status: "COMPLETED",
         })
         (map-set properties tx-sender
-            (merge property { payments-completed: (+ (get payments-completed property) u1) })
+            (merge property {
+                payments-completed: (+ (get payments-completed property) u1),
+                next-payment-due: (+ current-height payment-deadline),
+            })
         )
         (var-set payments-made payment-id)
         (var-set last-payment-height current-height)
@@ -133,4 +142,59 @@
 
 (define-read-only (get-payment-history (payment-id uint))
     (map-get? payment-history payment-id)
+)
+
+(define-private (calculate-late-fee (property {
+    owner: principal,
+    tenant: principal,
+    property-id: uint,
+    start-height: uint,
+    total-amount: uint,
+    monthly-amount: uint,
+    payments-completed: uint,
+    status: (string-ascii 20),
+    next-payment-due: uint,
+    late-fees-owed: uint,
+}))
+    (let (
+            (current-height stacks-block-height)
+            (payment-due (get next-payment-due property))
+            (grace-period-end (+ payment-due grace-period-blocks))
+        )
+        (if (> current-height grace-period-end)
+            (/ (* (get monthly-amount property) late-fee-rate) u100)
+            u0
+        )
+    )
+)
+
+(define-public (assess-late-fees (property-id uint))
+    (let (
+            (property (unwrap! (map-get? properties tx-sender) (err u50)))
+            (current-height stacks-block-height)
+            (payment-due (get next-payment-due property))
+            (grace-period-end (+ payment-due grace-period-blocks))
+        )
+        (asserts! (is-eq (get status property) "ACTIVE") (err u51))
+        (asserts! (> current-height grace-period-end) (err u52))
+        (let ((late-fee (calculate-late-fee property)))
+            (map-set properties tx-sender
+                (merge property { late-fees-owed: (+ (get late-fees-owed property) late-fee) })
+            )
+            (ok late-fee)
+        )
+    )
+)
+
+(define-public (pay-late-fees (property-id uint))
+    (let (
+            (property (unwrap! (map-get? properties tx-sender) (err u60)))
+            (late-fees (get late-fees-owed property))
+        )
+        (asserts! (> late-fees u0) (err u61))
+        (asserts! (is-eq tx-sender (get tenant property)) (err u62))
+        (try! (stx-transfer? late-fees tx-sender (get owner property)))
+        (map-set properties tx-sender (merge property { late-fees-owed: u0 }))
+        (ok true)
+    )
 )

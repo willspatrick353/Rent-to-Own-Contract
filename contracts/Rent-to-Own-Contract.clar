@@ -27,6 +27,17 @@
     }
 )
 
+(define-map escrow-balances
+    principal
+    {
+        total-escrowed: uint,
+        owner-portion: uint,
+        tenant-portion: uint,
+        release-height: uint,
+        escrow-status: (string-ascii 20),
+    }
+)
+
 (define-map payment-history
     uint
     {
@@ -60,6 +71,13 @@
             next-payment-due: (+ stacks-block-height payment-deadline),
             late-fees-owed: u0,
         })
+        (map-set escrow-balances tx-sender {
+            total-escrowed: u0,
+            owner-portion: u0,
+            tenant-portion: u0,
+            release-height: u0,
+            escrow-status: "ACTIVE",
+        })
         (ok true)
     )
 )
@@ -67,20 +85,29 @@
 (define-public (make-payment (property-id uint))
     (let (
             (property (unwrap! (map-get? properties tx-sender) (err u10)))
+            (escrow (unwrap! (map-get? escrow-balances tx-sender) (err u13)))
             (payment-id (+ (var-get payments-made) u1))
             (current-height stacks-block-height)
+            (payment-amount (get monthly-amount property))
+            (owner-share (/ (* payment-amount u70) u100))
+            (tenant-share (- payment-amount owner-share))
         )
         (asserts! (is-eq (get status property) "ACTIVE") (err u11))
         (asserts! (is-eq tx-sender (get tenant property)) (err u12))
-        (try! (stx-transfer? (get monthly-amount property) tx-sender
-            (get owner property)
-        ))
+        (try! (stx-transfer? payment-amount tx-sender (as-contract tx-sender)))
         (map-set payment-history payment-id {
             payment-height: current-height,
-            amount: (get monthly-amount property),
+            amount: payment-amount,
             payer: tx-sender,
-            status: "COMPLETED",
+            status: "ESCROWED",
         })
+        (map-set escrow-balances tx-sender
+            (merge escrow {
+                total-escrowed: (+ (get total-escrowed escrow) payment-amount),
+                owner-portion: (+ (get owner-portion escrow) owner-share),
+                tenant-portion: (+ (get tenant-portion escrow) tenant-share),
+            })
+        )
         (map-set properties tx-sender
             (merge property {
                 payments-completed: (+ (get payments-completed property) u1),
@@ -99,11 +126,24 @@
 )
 
 (define-private (transfer-ownership (property-id uint))
-    (let ((property (unwrap! (map-get? properties tx-sender) (err u20))))
+    (let (
+            (property (unwrap! (map-get? properties tx-sender) (err u20)))
+            (escrow (unwrap! (map-get? escrow-balances tx-sender) (err u21)))
+        )
+        (try! (as-contract (stx-transfer? (get owner-portion escrow) tx-sender (get owner property))))
+        (try! (as-contract (stx-transfer? (get tenant-portion escrow) tx-sender
+            (get tenant property)
+        )))
         (map-set properties tx-sender
             (merge property {
                 owner: (get tenant property),
                 status: "COMPLETED",
+            })
+        )
+        (map-set escrow-balances tx-sender
+            (merge escrow {
+                escrow-status: "RELEASED",
+                release-height: stacks-block-height,
             })
         )
         (ok true)
@@ -196,5 +236,68 @@
         (try! (stx-transfer? late-fees tx-sender (get owner property)))
         (map-set properties tx-sender (merge property { late-fees-owed: u0 }))
         (ok true)
+    )
+)
+
+(define-public (request-early-termination (property-id uint))
+    (let (
+            (property (unwrap! (map-get? properties tx-sender) (err u70)))
+            (escrow (unwrap! (map-get? escrow-balances tx-sender) (err u71)))
+            (total-payments-required (/ (get total-amount property) (get monthly-amount property)))
+            (payments-completed (get payments-completed property))
+            (completion-ratio (/ (* payments-completed u100) total-payments-required))
+            (owner-refund (if (> completion-ratio u50)
+                (/ (* (get owner-portion escrow) completion-ratio) u100)
+                (get owner-portion escrow)
+            ))
+            (tenant-refund (- (get total-escrowed escrow) owner-refund))
+        )
+        (asserts! (is-eq (get status property) "ACTIVE") (err u72))
+        (asserts!
+            (or
+                (is-eq tx-sender (get owner property))
+                (is-eq tx-sender (get tenant property))
+            )
+            (err u73)
+        )
+        (try! (as-contract (stx-transfer? owner-refund tx-sender (get owner property))))
+        (try! (as-contract (stx-transfer? tenant-refund tx-sender (get tenant property))))
+        (map-set properties tx-sender (merge property { status: "TERMINATED" }))
+        (map-set escrow-balances tx-sender
+            (merge escrow {
+                escrow-status: "REFUNDED",
+                release-height: stacks-block-height,
+            })
+        )
+        (ok {
+            owner-refund: owner-refund,
+            tenant-refund: tenant-refund,
+        })
+    )
+)
+
+(define-read-only (get-escrow-balance (property-owner principal))
+    (map-get? escrow-balances property-owner)
+)
+
+(define-read-only (calculate-refund-amounts (property-owner principal))
+    (let (
+            (property (unwrap! (map-get? properties property-owner) (err u80)))
+            (escrow (unwrap! (map-get? escrow-balances property-owner) (err u81)))
+            (total-payments-required (/ (get total-amount property) (get monthly-amount property)))
+            (payments-completed (get payments-completed property))
+            (completion-ratio (/ (* payments-completed u100) total-payments-required))
+            (owner-refund (if (> completion-ratio u50)
+                (/ (* (get owner-portion escrow) completion-ratio) u100)
+                (get owner-portion escrow)
+            ))
+            (tenant-refund (- (get total-escrowed escrow) owner-refund))
+        )
+        (ok {
+            owner-refund: owner-refund,
+            tenant-refund: tenant-refund,
+            completion-ratio: completion-ratio,
+            total-escrowed: (get total-escrowed escrow),
+        })
     )
 )

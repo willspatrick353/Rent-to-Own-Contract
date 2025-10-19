@@ -10,4 +10,4 @@ jobs:
       - name: "Check contract syntax"
         uses: docker://hirosystems/clarinet:latest
         with:
-          args: check
+          args: check contracts/Rent-to-Own-Contract.clar

@@ -370,12 +370,14 @@
             )
             (err ERR-INVALID-PRIORITY)
         )
-        (asserts!
-            (or
-                (is-eq tx-sender (unwrap-panic (get tenant (unwrap-panic property))))
-                (is-eq tx-sender property-owner)
+        (let ((property-data (unwrap! property (err ERR-INVALID-REQUEST))))
+            (asserts!
+                (or
+                    (is-eq tx-sender (get tenant property-data))
+                    (is-eq tx-sender property-owner)
+                )
+                (err ERR-UNAUTHORIZED-UPDATE)
             )
-            (err ERR-UNAUTHORIZED-UPDATE)
         )
         (map-set maintenance-requests request-id {
             property-owner: property-owner,
@@ -440,7 +442,7 @@
         )
         (map-set maintenance-history history-id {
             request-id: request-id,
-            action: (unwrap-panic (as-max-len? (concat u"Status updated to: " new-status) u100)),
+            action: (unwrap-panic (as-max-len? (concat u"Status updated to: " (to-utf8 new-status)) u100)),
             action-height: stacks-block-height,
             actor: tx-sender,
             notes: notes,
@@ -540,10 +542,10 @@
             (counter (var-get maintenance-request-counter))
             (property (map-get? properties property-owner))
         )
-        (if (is-some property)
-            (ok {
+        (match property
+            some-property (ok {
                 total-requests: counter,
-                property-status: (unwrap-panic (get status (unwrap-panic property))),
+                property-status: (get status some-property),
                 last-payment-height: (var-get last-payment-height),
             })
             (err ERR-INVALID-REQUEST)

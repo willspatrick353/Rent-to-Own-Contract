@@ -23,9 +23,3 @@ callee_filter = false
 [repl.remote_data]
 enabled = false
 api_url = 'https://api.hiro.so'
-
-[[deployment]]
-network = "devnet"
-deployment_plan_path = "./deployment-plan.yml"
-[deployment.accounts]
-deployer = "SP3GWX3NE58KXHESRYE4DYQ1S31PQJTCRXB3PE9SB"

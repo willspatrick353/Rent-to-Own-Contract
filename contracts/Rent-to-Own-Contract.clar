@@ -43,6 +43,9 @@
 (define-constant ERR-INVALID-PRIORITY u93)
 (define-constant ERR-INVALID-CATEGORY u94)
 (define-constant ERR-INVALID-STATUS-TRANSITION u95)
+(define-constant ERR-MAINTENANCE-ESCROW-NOT-FOUND u96)
+(define-constant ERR-MAINTENANCE-ESCROW-INVALID-AMOUNT u97)
+(define-constant ERR-MAINTENANCE-ESCROW-UNAUTHORIZED u98)
 
 ;; Data variables
 (define-data-var contract-active bool false)
@@ -119,6 +122,15 @@
     }
 )
 
+(define-map maintenance-escrow-balances
+    principal
+    {
+        balance: uint,
+        last-deposit-height: uint,
+        last-withdrawal-height: uint,
+    }
+)
+
 ;; ========================================
 ;; CORE RENT-TO-OWN FUNCTIONALITY
 ;; ========================================
@@ -160,15 +172,21 @@
 (define-public (make-payment (property-id uint))
     (let (
             (property (unwrap! (map-get? properties tx-sender) (err ERR-PROPERTY-NOT-FOUND)))
-            (escrow (unwrap! (map-get? escrow-balances tx-sender) (err ERR-ESCROW-NOT-FOUND)))
+            (escrow (unwrap! (map-get? escrow-balances tx-sender)
+                (err ERR-ESCROW-NOT-FOUND)
+            ))
             (payment-id (+ (var-get payments-made) u1))
             (current-height stacks-block-height)
             (payment-amount (get monthly-amount property))
             (owner-share (/ (* payment-amount u70) u100))
             (tenant-share (- payment-amount owner-share))
         )
-        (asserts! (is-eq (get status property) "ACTIVE") (err ERR-CONTRACT-INACTIVE))
-        (asserts! (is-eq tx-sender (get tenant property)) (err ERR-UNAUTHORIZED-TENANT))
+        (asserts! (is-eq (get status property) "ACTIVE")
+            (err ERR-CONTRACT-INACTIVE)
+        )
+        (asserts! (is-eq tx-sender (get tenant property))
+            (err ERR-UNAUTHORIZED-TENANT)
+        )
         (try! (stx-transfer? payment-amount tx-sender (as-contract tx-sender)))
         (map-set payment-history payment-id {
             payment-height: current-height,
@@ -203,7 +221,9 @@
 (define-private (transfer-ownership (property-id uint))
     (let (
             (property (unwrap! (map-get? properties tx-sender) (err ERR-TRANSFER-FAILED)))
-            (escrow (unwrap! (map-get? escrow-balances tx-sender) (err ERR-ESCROW-RELEASE-FAILED)))
+            (escrow (unwrap! (map-get? escrow-balances tx-sender)
+                (err ERR-ESCROW-RELEASE-FAILED)
+            ))
         )
         (try! (as-contract (stx-transfer? (get owner-portion escrow) tx-sender (get owner property))))
         (try! (as-contract (stx-transfer? (get tenant-portion escrow) tx-sender
@@ -227,7 +247,9 @@
 
 (define-public (check-payment-status (property-id uint))
     (let (
-            (property (unwrap! (map-get? properties tx-sender) (err ERR-PAYMENT-STATUS-ERROR)))
+            (property (unwrap! (map-get? properties tx-sender)
+                (err ERR-PAYMENT-STATUS-ERROR)
+            ))
             (current-height stacks-block-height)
         )
         (ok {
@@ -245,7 +267,9 @@
             (or (is-eq tx-sender contract-owner) (is-eq tx-sender (get owner property)))
             (err ERR-CANCELLATION-UNAUTHORIZED)
         )
-        (asserts! (is-eq (get status property) "ACTIVE") (err ERR-CANCELLATION-INVALID-STATUS))
+        (asserts! (is-eq (get status property) "ACTIVE")
+            (err ERR-CANCELLATION-INVALID-STATUS)
+        )
         (map-set properties tx-sender (merge property { status: "CANCELLED" }))
         (ok true)
     )
@@ -278,13 +302,19 @@
 
 (define-public (assess-late-fees (property-id uint))
     (let (
-            (property (unwrap! (map-get? properties tx-sender) (err ERR-LATE-FEE-ASSESSMENT)))
+            (property (unwrap! (map-get? properties tx-sender)
+                (err ERR-LATE-FEE-ASSESSMENT)
+            ))
             (current-height stacks-block-height)
             (payment-due (get next-payment-due property))
             (grace-period-end (+ payment-due grace-period-blocks))
         )
-        (asserts! (is-eq (get status property) "ACTIVE") (err ERR-LATE-FEE-INVALID-STATUS))
-        (asserts! (> current-height grace-period-end) (err ERR-LATE-FEE-TOO-EARLY))
+        (asserts! (is-eq (get status property) "ACTIVE")
+            (err ERR-LATE-FEE-INVALID-STATUS)
+        )
+        (asserts! (> current-height grace-period-end)
+            (err ERR-LATE-FEE-TOO-EARLY)
+        )
         (let ((late-fee (calculate-late-fee property)))
             (map-set properties tx-sender
                 (merge property { late-fees-owed: (+ (get late-fees-owed property) late-fee) })
@@ -296,11 +326,15 @@
 
 (define-public (pay-late-fees (property-id uint))
     (let (
-            (property (unwrap! (map-get? properties tx-sender) (err ERR-LATE-FEE-PAYMENT-INVALID)))
+            (property (unwrap! (map-get? properties tx-sender)
+                (err ERR-LATE-FEE-PAYMENT-INVALID)
+            ))
             (late-fees (get late-fees-owed property))
         )
         (asserts! (> late-fees u0) (err ERR-LATE-FEE-AMOUNT-ZERO))
-        (asserts! (is-eq tx-sender (get tenant property)) (err ERR-LATE-FEE-UNAUTHORIZED))
+        (asserts! (is-eq tx-sender (get tenant property))
+            (err ERR-LATE-FEE-UNAUTHORIZED)
+        )
         (try! (stx-transfer? late-fees tx-sender (get owner property)))
         (map-set properties tx-sender (merge property { late-fees-owed: u0 }))
         (ok true)
@@ -309,8 +343,12 @@
 
 (define-public (request-early-termination (property-id uint))
     (let (
-            (property (unwrap! (map-get? properties tx-sender) (err ERR-TERMINATION-PROPERTY-NOT-FOUND)))
-            (escrow (unwrap! (map-get? escrow-balances tx-sender) (err ERR-TERMINATION-ESCROW-NOT-FOUND)))
+            (property (unwrap! (map-get? properties tx-sender)
+                (err ERR-TERMINATION-PROPERTY-NOT-FOUND)
+            ))
+            (escrow (unwrap! (map-get? escrow-balances tx-sender)
+                (err ERR-TERMINATION-ESCROW-NOT-FOUND)
+            ))
             (total-payments-required (/ (get total-amount property) (get monthly-amount property)))
             (payments-completed (get payments-completed property))
             (completion-ratio (/ (* payments-completed u100) total-payments-required))
@@ -320,7 +358,9 @@
             ))
             (tenant-refund (- (get total-escrowed escrow) owner-refund))
         )
-        (asserts! (is-eq (get status property) "ACTIVE") (err ERR-TERMINATION-INVALID-STATUS))
+        (asserts! (is-eq (get status property) "ACTIVE")
+            (err ERR-TERMINATION-INVALID-STATUS)
+        )
         (asserts!
             (or
                 (is-eq tx-sender (get owner property))
@@ -363,7 +403,8 @@
         (asserts! (> (len description) u0) (err ERR-INVALID-REQUEST))
         (asserts! (> (len category) u0) (err ERR-INVALID-REQUEST))
         (asserts!
-            (or (is-eq priority "LOW")
+            (or
+                (is-eq priority "LOW")
                 (is-eq priority "MEDIUM")
                 (is-eq priority "HIGH")
                 (is-eq priority "CRITICAL")
@@ -410,7 +451,9 @@
         (assigned-to (optional principal))
     )
     (let (
-            (request (unwrap! (map-get? maintenance-requests request-id) (err ERR-REQUEST-NOT-FOUND)))
+            (request (unwrap! (map-get? maintenance-requests request-id)
+                (err ERR-REQUEST-NOT-FOUND)
+            ))
             (history-id (+ request-id u1000))
         )
         (asserts!
@@ -421,7 +464,8 @@
             (err ERR-UNAUTHORIZED-UPDATE)
         )
         (asserts!
-            (or (is-eq new-status "PENDING")
+            (or
+                (is-eq new-status "PENDING")
                 (is-eq new-status "APPROVED")
                 (is-eq new-status "IN_PROGRESS")
                 (is-eq new-status "COMPLETED")
@@ -442,7 +486,8 @@
         )
         (map-set maintenance-history history-id {
             request-id: request-id,
-            action: (unwrap-panic (as-max-len? (concat u"Status updated to: " (to-utf8 new-status)) u100)),
+            ;; Simplified action message without dynamic string conversion
+            action: u"Status updated",
             action-height: stacks-block-height,
             actor: tx-sender,
             notes: notes,
@@ -457,7 +502,9 @@
         (notes (optional (string-utf8 200)))
     )
     (let (
-            (request (unwrap! (map-get? maintenance-requests request-id) (err ERR-REQUEST-NOT-FOUND)))
+            (request (unwrap! (map-get? maintenance-requests request-id)
+                (err ERR-REQUEST-NOT-FOUND)
+            ))
             (history-id (+ request-id u2000))
         )
         (asserts!
@@ -467,7 +514,9 @@
             )
             (err ERR-UNAUTHORIZED-UPDATE)
         )
-        (asserts! (is-eq (get status request) "APPROVED") (err ERR-INVALID-STATUS-TRANSITION))
+        (asserts! (is-eq (get status request) "APPROVED")
+            (err ERR-INVALID-STATUS-TRANSITION)
+        )
         (map-set maintenance-requests request-id
             (merge request {
                 assigned-to: (some worker),
@@ -482,6 +531,72 @@
             notes: notes,
         })
         (ok true)
+    )
+)
+
+(define-public (fund-maintenance-escrow
+        (property-owner principal)
+        (amount uint)
+    )
+    (let (
+            (property (unwrap! (map-get? properties property-owner)
+                (err ERR-PROPERTY-NOT-FOUND)
+            ))
+            (existing (map-get? maintenance-escrow-balances property-owner))
+            (current-balance (match existing
+                existing-escrow (get balance existing-escrow)
+                u0
+            ))
+            (last-withdrawal (match existing
+                existing-escrow (get last-withdrawal-height existing-escrow)
+                u0
+            ))
+        )
+        (asserts! (> amount u0) (err ERR-MAINTENANCE-ESCROW-INVALID-AMOUNT))
+        (asserts!
+            (or
+                (is-eq tx-sender (get owner property))
+                (is-eq tx-sender (get tenant property))
+            )
+            (err ERR-MAINTENANCE-ESCROW-UNAUTHORIZED)
+        )
+        (map-set maintenance-escrow-balances property-owner {
+            balance: (+ current-balance amount),
+            last-deposit-height: stacks-block-height,
+            last-withdrawal-height: last-withdrawal,
+        })
+        (ok (+ current-balance amount))
+    )
+)
+
+(define-public (withdraw-maintenance-escrow
+        (property-owner principal)
+        (amount uint)
+    )
+    (let (
+            (property (unwrap! (map-get? properties property-owner)
+                (err ERR-PROPERTY-NOT-FOUND)
+            ))
+            (escrow (unwrap! (map-get? maintenance-escrow-balances property-owner)
+                (err ERR-MAINTENANCE-ESCROW-NOT-FOUND)
+            ))
+            (balance (get balance escrow))
+        )
+        (asserts! (> amount u0) (err ERR-MAINTENANCE-ESCROW-INVALID-AMOUNT))
+        (asserts! (<= amount balance) (err ERR-MAINTENANCE-ESCROW-INVALID-AMOUNT))
+        (asserts!
+            (or
+                (is-eq tx-sender (get owner property))
+                (is-eq tx-sender contract-owner)
+            )
+            (err ERR-MAINTENANCE-ESCROW-UNAUTHORIZED)
+        )
+        (map-set maintenance-escrow-balances property-owner {
+            balance: (- balance amount),
+            last-deposit-height: (get last-deposit-height escrow),
+            last-withdrawal-height: stacks-block-height,
+        })
+        (ok (- balance amount))
     )
 )
 
@@ -504,8 +619,12 @@
 
 (define-read-only (calculate-refund-amounts (property-owner principal))
     (let (
-            (property (unwrap! (map-get? properties property-owner) (err ERR-REFUND-CALCULATION-ERROR)))
-            (escrow (unwrap! (map-get? escrow-balances property-owner) (err ERR-REFUND-ESCROW-ERROR)))
+            (property (unwrap! (map-get? properties property-owner)
+                (err ERR-REFUND-CALCULATION-ERROR)
+            ))
+            (escrow (unwrap! (map-get? escrow-balances property-owner)
+                (err ERR-REFUND-ESCROW-ERROR)
+            ))
             (total-payments-required (/ (get total-amount property) (get monthly-amount property)))
             (payments-completed (get payments-completed property))
             (completion-ratio (/ (* payments-completed u100) total-payments-required))

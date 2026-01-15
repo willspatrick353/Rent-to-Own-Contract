@@ -9,7 +9,7 @@ requirements = []
 [contracts.Rent-to-Own-Contract]
 path = 'contracts/Rent-to-Own-Contract.clar'
 clarity_version = 3
-epoch = 3.1
+epoch = 3.0
 
 [repl.analysis]
 passes = ['check_checker']

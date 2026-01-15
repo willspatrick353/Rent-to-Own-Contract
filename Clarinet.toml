@@ -1,0 +1,19 @@
+[project]
+name = 'Rent-to-Own-Contract'
+description = 'Smart contract for rent-to-own property management with maintenance tracking system'
+authors = ['willspatrick353']
+telemetry = true
+cache_dir = '.\.cache'
+requirements = []
+
+[contracts.Rent-to-Own-Contract]
+path = 'contracts/Rent-to-Own-Contract.clar'
+clarity_version = 3
+epoch = 3.0
+
+[repl.analysis]
+passes = []
+
+[repl.remote_data]
+enabled = false
+api_url = 'https://api.hiro.so'
